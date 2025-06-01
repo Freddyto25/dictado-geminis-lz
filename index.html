@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Reconocimiento de Voz</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    button, input { padding: 10px; font-size: 16px; margin: 5px 0; }
+    #output { margin-top: 20px; font-size: 18px; min-height: 40px; white-space: pre-wrap; }
+    #copy-msg {
+      color: green;
+      margin-top: 10px;
+      font-size: 14px;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+    #copy-msg.visible { opacity: 1; }
+    #api-key-input { width: 100%; max-width: 400px; }
+  </style>
+</head>
+<body>
+
+<h1>Reconocimiento de Voz</h1>
+
+<input type="text" id="api-key-input" placeholder="Ingresa tu clave de API" />
+<button id="save-api-btn">Guardar Clave</button>
+
+<br><br>
+<button id="start-btn">Comenzar a Escuchar</button>
+<button id="stop-btn" disabled>Detener</button>
+
+<div id="output"></div>
+<div id="copy-msg">¡Texto corregido y copiado al portapapeles!</div>
+
+<script>
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  const apiKeyInput = document.getElementById('api-key-input');
+  const saveApiBtn = document.getElementById('save-api-btn');
+  const startBtn = document.getElementById('start-btn');
+  const stopBtn = document.getElementById('stop-btn');
+  const outputDiv = document.getElementById('output');
+  const copyMsg = document.getElementById('copy-msg');
+
+  let isListening = false;
+  let fullTranscript = '';
+
+  const getApiKey = () => localStorage.getItem('groq_api_key') || '';
+  const setApiKey = (key) => localStorage.setItem('groq_api_key', key);
+
+  // Mostrar clave si ya estaba guardada
+  window.addEventListener('DOMContentLoaded', () => {
+    const existingKey = getApiKey();
+    if (existingKey) apiKeyInput.value = existingKey;
+  });
+
+  saveApiBtn.addEventListener('click', () => {
+    const key = apiKeyInput.value.trim();
+    if (key.startsWith('gsk_') && key.length > 20) {
+      setApiKey(key);
+      alert('Clave guardada correctamente.');
+    } else {
+      alert('Clave no válida. Asegúrate de que sea una clave válida de Groq.');
+    }
+  });
+
+  if (!SpeechRecognition) {
+    outputDiv.textContent = 'Lo sentimos, tu navegador no admite reconocimiento de voz.';
+    startBtn.disabled = true;
+    stopBtn.disabled = true;
+  } else {
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'es-ES';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.continuous = true;
+
+    startBtn.addEventListener('click', () => {
+      const key = getApiKey();
+      if (!key) {
+        alert('Por favor, ingresa y guarda tu clave de API antes de comenzar.');
+        return;
+      }
+
+      isListening = true;
+      fullTranscript = '';
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      copyMsg.classList.remove('visible');
+      outputDiv.textContent = 'Escuchando... Por favor, habla ahora.';
+      recognition.start();
+    });
+
+    stopBtn.addEventListener('click', async () => {
+      isListening = false;
+      recognition.stop();
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+
+      const rawText = fullTranscript.trim();
+      if (!rawText) {
+        outputDiv.textContent = 'No se reconoció ningún discurso.';
+        return;
+      }
+
+      outputDiv.textContent = 'Corrigiendo el texto...';
+
+      const apiKey = getApiKey();
+
+      try {
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + apiKey
+          },
+          body: JSON.stringify({
+            model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+            messages: [{
+              role: 'user',
+              content: 'Corrige este texto y devuélvelo corregido sin explicaciones ni introducciones: ' + rawText
+            }]
+          })
+        });
+
+        const data = await response.json();
+
+        if (!data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
+          throw new Error('La API no devolvió una respuesta válida.');
+        }
+
+        const correctedText = data.choices[0].message.content.trim();
+        outputDiv.textContent = correctedText;
+
+        try {
+          await navigator.clipboard.writeText(correctedText);
+          copyMsg.classList.add('visible');
+          setTimeout(() => copyMsg.classList.remove('visible'), 3000);
+        } catch (err) {
+          console.error('Error al copiar al portapapeles:', err);
+        }
+
+      } catch (err) {
+        outputDiv.textContent = 'Error con la API: ' + err.message;
+        console.error(err);
+      }
+    });
+
+    recognition.onresult = (event) => {
+      const spokenText = event.results[event.results.length - 1][0].transcript.trim();
+      const finalText = spokenText.endsWith('.') ? spokenText : spokenText + '.';
+      fullTranscript += finalText + ' ';
+      outputDiv.textContent = fullTranscript;
+    };
+
+    recognition.onerror = (event) => {
+      outputDiv.textContent = `Ocurrió un error: ${event.error}. Intenta nuevamente.`;
+      isListening = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    };
+
+    recognition.onend = () => {
+      if (isListening) {
+        recognition.start();
+      } else {
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      }
+    };
+  }
+</script>
+
+</body>
+</html>
